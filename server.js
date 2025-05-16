@@ -77,6 +77,20 @@ io.on('connection', (socket) => {
             console.log(`No active call to end: ${data.callId}`);
         }
     });
+    
+    socket.on('search-users', async ({ query, userId }) => {
+        try {
+            const searchTerm = `%${query}%`;
+            const [users] = await pool.query(
+                'SELECT id, username, full_name, profile_pic FROM users WHERE username LIKE ? OR full_name LIKE ? LIMIT 20',
+                [searchTerm, searchTerm]
+            );
+            socket.emit('search-results', users);
+        } catch (error) {
+            console.error('Search error:', error);
+            socket.emit('search-results', []);
+        }
+    });
 
     socket.on('heartbeat', (data) => {
         console.log(`Heartbeat from user: ${data.userId}`);
