@@ -9,7 +9,7 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
     cors: {
-        origin: 'https://pepper-transport-database-appreciated.trycloudflare.com',
+        origin: 'https://nashville-zimbabwe-corporation-selecting.trycloudflare.com',
         methods: ['GET', 'POST'],
         credentials: true
     }
