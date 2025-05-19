@@ -4,6 +4,8 @@ const http = require('http');
 const { Server } = require('socket.io');
 const { RateLimiterMemory } = require('rate-limiter-flexible');
 const sanitizeHtml = require('sanitize-html');
+const fetch = require('node-fetch');
+const NodeCache = require('node-cache');
 
 const app = express();
 const server = http.createServer(app);
@@ -22,24 +24,17 @@ const CONFIG = {
         duration: 60 // per 60 seconds
     },
     HEARTBEAT_INTERVAL: 30000, // 30 seconds
-    TOKEN_EXPIRY: 3600000 // 1 hour in ms
+    API_BASE_URL: 'https://nashville-zimbabwe-corporation-selecting.trycloudflare.com/instapy/reels/api.php'
 };
 
 // In-Memory Storage
 const activeCalls = new Map(); // Track active calls by callId
-const tokens = new Map([
-    ['demo-token-123', { user_id: 1, username: 'user1', profile_pic: '/uploads/profiles/user1.jpg', expires: Date.now() + CONFIG.TOKEN_EXPIRY }],
-    ['demo-token-456', { user_id: 2, username: 'user2', profile_pic: '/uploads/profiles/user2.jpg', expires: Date.now() + CONFIG.TOKEN_EXPIRY }]
-]);
 const reels = new Map([
     [1, { like_count: 0, comment_count: 0 }],
     [2, { like_count: 0, comment_count: 0 }]
 ]);
-const users = [
-    { id: 1, username: 'user1', full_name: 'User One', profile_pic: '/uploads/profiles/user1.jpg' },
-    { id: 2, username: 'user2', full_name: 'User Two', profile_pic: '/uploads/profiles/user2.jpg' }
-];
-const clients = new Map();
+const clients = new Map(); // Map<socket.id, { userId: number, ip: string }>
+const userCache = new NodeCache({ stdTTL: 3600 }); // Cache users for 1 hour
 
 // Initialize Rate Limiter
 const rateLimiter = new RateLimiterMemory({
@@ -61,13 +56,44 @@ function sanitize(input) {
     });
 }
 
-// Validate Token
-function validateToken(token) {
-    const userData = tokens.get(token);
-    if (!userData || userData.expires < Date.now()) {
-        throw new Error('Invalid or expired token');
+// Fetch Users from api.php
+async function fetchUsers() {
+    try {
+        const response = await fetch(`${CONFIG.API_BASE_URL}?action=get_users`);
+        const data = await response.json();
+        if (data.error || !data.users) {
+            throw new Error(data.error || 'Failed to fetch users');
+        }
+        userCache.set('users', data.users);
+        return data.users;
+    } catch (error) {
+        log(`Fetch users failed: ${error.message}`, 'ERROR');
+        return userCache.get('users') || [];
     }
-    return userData;
+}
+
+// Validate Token via api.php
+async function validateToken(token) {
+    try {
+        const response = await fetch(`${CONFIG.API_BASE_URL}?action=validate_token&token=${encodeURIComponent(token)}`);
+        const data = await response.json();
+        if (data.error || !data.user_id) {
+            throw new Error(data.error || 'Invalid token');
+        }
+        const users = await fetchUsers();
+        const user = users.find(u => u.id === data.user_id);
+        if (!user) {
+            throw new Error('User not found');
+        }
+        return {
+            user_id: data.user_id,
+            username: user.username,
+            profile_pic: user.profile_pic
+        };
+    } catch (error) {
+        log(`Token validation failed: ${error.message}`, 'ERROR');
+        throw error;
+    }
 }
 
 // Heartbeat Mechanism
@@ -94,15 +120,15 @@ io.on('connection', (socket) => {
     log(`User connected: ${socket.id}, IP: ${ip}`);
     socket.isAlive = true;
 
-    socket.on('register', ({ userId, token }) => {
+    socket.on('register', async ({ userId, token }) => {
         try {
-            const userData = validateToken(token);
+            const userData = await validateToken(token);
             if (userData.user_id !== userId) {
                 throw new Error('Token does not match user ID');
             }
             clients.set(socket.id, { userId, ip });
             socket.join(userId.toString());
-            log(`Registered user: ${userId}`);
+            log(`Registered user: ${userId}, Username: ${userData.username}`);
             socket.emit('register-success', { userId });
         } catch (error) {
             log(`Registration failed for ${socket.id}: ${error.message}`, 'ERROR');
@@ -196,8 +222,8 @@ io.on('connection', (socket) => {
             if (!clientData) {
                 throw new Error('Client not registered');
             }
-            const userData = tokens.get(data.token);
-            if (!userData || userData.user_id !== clientData.userId) {
+            const userData = await validateToken(data.token);
+            if (userData.user_id !== clientData.userId) {
                 throw new Error('Invalid token');
             }
             if (!data.action || !['like', 'unlike', 'save', 'unsave', 'comment', 'delete', 'follow'].includes(data.action)) {
@@ -240,18 +266,19 @@ io.on('connection', (socket) => {
             }
 
             io.emit('reel-action', sanitizedData);
-            log(`Reel action ${sanitizedData.action} by User ID ${userData.user_id} on Reel ${sanitizedData.reel_id || 'N/A'}`);
+            log(`Reel action ${sanitizedData.action} by User ID ${userData.user_id} (${userData.username}) on Reel ${sanitizedData.reel_id || 'N/A'}`);
         } catch (error) {
             log(`Reel action failed: ${error.message}`, 'ERROR');
             socket.emit('reel-error', { error: error.message });
         }
     });
 
-    // Search Users (In-Memory)
+    // Search Users
     socket.on('search-users', async ({ query, userId }) => {
         try {
             await rateLimiter.consume(ip);
             const searchTerm = query.toLowerCase().trim();
+            const users = await fetchUsers();
             const results = users.filter(user =>
                 user.username.toLowerCase().includes(searchTerm) ||
                 user.full_name.toLowerCase().includes(searchTerm)
