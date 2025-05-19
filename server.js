@@ -38,8 +38,8 @@ const reels = new Map([
 const users = [
     { id: 1, username: 'user1', full_name: 'User One', profile_pic: '/uploads/profiles/user1.jpg' },
     { id: 2, username: 'user2', full_name: 'User Two', profile_pic: '/uploads/profiles/user2.jpg' }
-]);
-const clients = new Map(); // Map<socket.id, { userId: number, ip: string }>
+];
+const clients = new Map();
 
 // Initialize Rate Limiter
 const rateLimiter = new RateLimiterMemory({
@@ -251,7 +251,7 @@ io.on('connection', (socket) => {
     socket.on('search-users', async ({ query, userId }) => {
         try {
             await rateLimiter.consume(ip);
-            const searchTerm = query.toLowerCase();
+            const searchTerm = query.toLowerCase().trim();
             const results = users.filter(user =>
                 user.username.toLowerCase().includes(searchTerm) ||
                 user.full_name.toLowerCase().includes(searchTerm)
