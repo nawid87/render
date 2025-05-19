@@ -8,6 +8,8 @@
   },
   "dependencies": {
     "dotenv": "^16.4.5",
+    "node-cache": "^5.1.2",
+    "node-fetch": "^2.7.0",
     "rate-limiter-flexible": "^3.0.0",
     "sanitize-html": "^2.13.0",
     "express": "^5.1.0",
